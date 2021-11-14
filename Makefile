@@ -29,7 +29,8 @@ $(server): https-server.o https-common.o cJSON.o
 	$(CC) $^ -o $@ $(LIBS)
 
 
-
+# $(my_server): my_server.o https-common.o cJSON.o
+# 	$(CC) $^ -o $@ $(LIBS)
 
 
 #clean指令

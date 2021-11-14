@@ -27,16 +27,9 @@
 
 #include <cJSON.h>
 
-#include<stdio.h>
-#include<pthread.h>
-#include<stdlib.h>
-#include<string.h>
-
-
 
 #define MYHTTPD_SIGNATURE   "MoCarHttpd v0.1"
 
-#define NTHREADS 5
 
 #ifdef EVENT__HAVE_NETINET_IN_H
 #include <netinet/in.h>
@@ -57,12 +50,6 @@ typedef union
     struct sockaddr_in in;
     struct sockaddr_in6 i6;
 } sock_hop;
-
-typedef struct httpd_info{
-	struct event_base *base;
-	struct evhttp *httpd;
-}httpd_info;
-
 
 /*a default methord for call back*/
 void http_default(struct evhttp_request *req, void *arg)
@@ -85,8 +72,7 @@ void http_default(struct evhttp_request *req, void *arg)
     {
         printf ("Listening on %s:%s\n", p->key, p->value);
     }
-    // evhttp_send_reply(req, 200, "OK", NULL);
-    evhttp_send_error(request,HTTP_NOTFOUND,"Default Reply");
+    evhttp_send_reply(req, 200, "OK", NULL);
 }
 
 /*a basic interface for get methord*/
@@ -142,11 +128,15 @@ post_method (struct evhttp_request *req, void *arg)
     cJSON* time = cJSON_GetObjectItem(root, "time");
     cJSON* sessionID = cJSON_GetObjectItem(root, "sessionID");
     cJSON* sid = cJSON_GetObjectItem(root, "sid");
+
     cJSON_Delete(root);
+
     //packet json
     root = cJSON_CreateObject();
+
     cJSON_AddStringToObject(root, "result", "ok");
     //cJSON_AddStringToObject(root, "sessionid", "xxxxxxxx");
+
     char *response_data = cJSON_Print(root);
     cJSON_Delete(root);
 
@@ -155,17 +145,9 @@ post_method (struct evhttp_request *req, void *arg)
     evhttp_add_header(evhttp_request_get_output_headers(req), "Server", MYHTTPD_SIGNATURE);
     evhttp_add_header(evhttp_request_get_output_headers(req), "Content-Type", "text/plain; charset=UTF-8");
     evhttp_add_header(evhttp_request_get_output_headers(req), "Connection", "close");
+
     evb = evbuffer_new ();
     evbuffer_add_printf(evb, "%s", response_data);
-
-    // sleep(10);
-    pid_t pid;
-    pthread_t tid;
-    pid = getpid();
-    tid = pthread_self();
-    printf("handdle by pid %u tid %u (0x%x)\n", (unsigned int)pid,
-                (unsigned int)tid, (unsigned int)tid); /* tid是unsigned long int,这里只是方便转换 */
-
     //将封装好的evbuffer 发送给客户端
     evhttp_send_reply(req, HTTP_OK, "OK", evb);
 
@@ -756,108 +738,6 @@ static int serve_some_http (void)
     return 0;
 }
 
-
-/*TODO: down here:
- 1 ssh
- 2 更改成connection base
- 2 现在的线程并不和socket绑定，或者说socket断开太快了？一个socket无法做多个req
- 3 把原来的回调函数写在这里
-*/
-
-/*
-void testing(struct evhttp_request * request,void * args){
-	if (request==NULL)
-	{
-		printf("request timeout\n");
-		return;
-	}
-	sleep(3);
-	printf("===THREAD %ld===\n",pthread_self());
-	// printf("IP: %s:%d\n",request->remote_host,request->remote_port);
-    // print_request(request);
-    //const char *uri=evhttp_request_get_uri(request);
-
-    //TODO: amend contents below
-	struct evbuffer *buffer=evbuffer_new();
-	//evbuffer_add(buffer,"coucou !",8);
-	evbuffer_add_printf(buffer,"Hello World!");
-	evhttp_add_header(evhttp_request_get_output_headers(request),"Content-Type","test/plain");
-	evhttp_send_reply(request,HTTP_OK,"OK",buffer);
-	evbuffer_free(buffer);
-	
-	return;
-	
-}*/
-
-// void notfound(struct evhttp_request * request,void * args){
-// 	evhttp_send_error(request,HTTP_NOTFOUND,"Not Found");
-// }
-
-// task for each thread
-// TODO: 这里可否改成一次连接？不用event_base_dispatch? 事件循环的退出条件是-？)
-void *dispatch(void *args){
-	struct httpd_info *info=(struct httpd_info *)args;
-	printf("thread %ld start\n",pthread_self());
-	event_base_dispatch(info->base);
-	printf("thread %ld ./n",pthread_self());
-	event_base_free(info->base);
-	evhttp_free(info->httpd);
-}
-int bind_socket(){
-	int ret,server_socket,opt=1;
-	server_socket=socket(AF_INET,SOCK_STREAM|SOCK_NONBLOCK,0);//NOTE 多线程evhttp必须非阻塞
-	if (server_socket<0)
-        errx(-1,"ERROR get socket: %d\n",server_socket);
- 
-	setsockopt(server_socket,SOL_SOCKET,SO_REUSEADDR,&opt,sizeof(opt));
-	struct sockaddr_in addr;
-	memset(&addr,0,sizeof(addr));
-	addr.sin_family=AF_INET;
-	addr.sin_addr.s_addr=INADDR_ANY;
-	addr.sin_port=htons(8080);
-	ret=bind(server_socket,(struct sockaddr*)&addr,sizeof(struct sockaddr));
-	if(ret<0)
-        errx(-1,"bind error\n");
- 
-	listen(server_socket,1024);
-	return server_socket;
-}
-
-int set_ssh(struct evhttp *http)
-{
-        /* 创建SSL上下文环境 ，可以理解为 SSL句柄 */
-    SSL_CTX *ctx = SSL_CTX_new (SSLv23_server_method ());
-    SSL_CTX_set_options (ctx,
-            SSL_OP_SINGLE_DH_USE |
-            SSL_OP_SINGLE_ECDH_USE |
-            SSL_OP_NO_SSLv2);
-
-    /* Cheesily pick an elliptic curve to use with elliptic curve ciphersuites.
-     * We just hardcode a single curve which is reasonably decent.
-     * See http://www.mail-archive.com/openssl-dev@openssl.org/msg30957.html */
-    EC_KEY *ecdh = EC_KEY_new_by_curve_name (NID_X9_62_prime256v1);
-    if (! ecdh)
-        die_most_horribly_from_openssl_error ("EC_KEY_new_by_curve_name");
-    if (1 != SSL_CTX_set_tmp_ecdh (ctx, ecdh))
-        die_most_horribly_from_openssl_error ("SSL_CTX_set_tmp_ecdh");
-
-    /* 选择服务器证书 和 服务器私钥. */
-    // const char *certificate_chain = "server-certificate-chain.pem";
-    const char *certificate_chain = "cert_chain2.pem";
-    // const char *private_key = "server-private-key.pem";
-    const char *private_key = "private-key2.pem";
-    /* 设置服务器证书 和 服务器私钥 到 
-     OPENSSL ctx上下文句柄中 */
-    server_setup_certs (ctx, certificate_chain, private_key);
-
-    /* 
-        使我们创建好的evhttp句柄 支持 SSL加密
-        实际上，加密的动作和解密的动作都已经帮
-        我们自动完成，我们拿到的数据就已经解密之后的
-    */
-    evhttp_set_bevcb (http, bevcb, ctx);
-}
-
 int main (int argc, char **argv)
 { 
     /*OpenSSL 初始化 */
@@ -883,39 +763,5 @@ int main (int argc, char **argv)
     }
 
     /* now run http server (never returns) */
-    // return serve_some_http ();
-    
-    //multi-thread begin here:(main thread)
-    pthread_t ths[NTHREADS];
-	httpd_info info_arr[NTHREADS],*pinfo;
-	int i,ret,opt=1,server_socket;
-	server_socket=bind_socket();    //类似于之前的bind。这里是直接用socket实现。
-	
-    //绑定线程与http句柄；到来connection的时候进入下一个循环（？）
-	for(i=0;i<NTHREADS;i++)
-	{
-		pinfo=&info_arr[i];
-		pinfo->base=event_base_new();       //构建base & http（每个thread都有
-		if (pinfo->base==NULL)
-			errx(-1,"ERROR new base\n");
-		pinfo->httpd=evhttp_new(pinfo->base);
-		if (pinfo->httpd==NULL)
-            errx(-1,"ERROR new evhttp\n");
-        set_ssh(pinfo->httpd);
-		ret=evhttp_accept_socket(pinfo->httpd,server_socket); //make a socket accept connection 相比之下bind socket是将socket绑定至端口。
-		if (ret!=0)
-            errx(-1,"Error evhttp_accept_socket\n");
- 
-		evhttp_set_cb(pinfo->httpd,"/post_method", post_method,0);
-		evhttp_set_gencb(pinfo->httpd,http_default,0);
-		ret=pthread_create(&ths[i],NULL,dispatch,pinfo);
-	}
-	for(i=0;i<NTHREADS;i++)
-	{
-        printf("in loop/n");
-		pthread_join(ths[i],NULL);
-	}
-
-
-    return 0;
+    return serve_some_http ();
 }
